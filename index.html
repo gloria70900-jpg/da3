@@ -1,0 +1,557 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Organic VR: Mobius Galaxy Flow</title>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #000; font-family: sans-serif; color: white;}
+        
+        #ui {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            background: radial-gradient(circle, #050508 0%, #000 100%); z-index: 100;
+        }
+        .upload-btn {
+            position: relative; overflow: hidden; display: inline-block;
+            padding: 20px 40px; background: linear-gradient(45deg, #4488ff, #aa44ff);
+            color: white; font-size: 24px; font-weight: bold; border-radius: 50px;
+            cursor: pointer; transition: transform 0.2s; box-shadow: 0 0 30px rgba(68, 136, 255, 0.5);
+        }
+        .upload-btn input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
+        #instructions { margin-top: 30px; text-align: center; line-height: 1.8; color: #ccc; }
+        #loading { display: none; margin-top: 20px; font-size: 20px; color: #4488ff; }
+        
+        #hud {
+            position: absolute; top: 10px; width: 100%; text-align: center;
+            pointer-events: none; z-index: 50; display: none; text-shadow: 0 0 5px #000; font-size: 16px; color: #ccc;
+        }
+
+        #control-panel {
+            position: absolute; left: 20px; top: 20px; width: 340px; bottom: 20px;
+            background: rgba(5, 5, 10, 0.85); border: 1px solid #4488ff; border-radius: 10px;
+            display: none; flex-direction: column; padding: 15px; box-sizing: border-box;
+            z-index: 60; backdrop-filter: blur(5px);
+        }
+        #control-panel h2 { margin: 0 0 10px 0; font-size: 18px; color: #4488ff; }
+        #search-input {
+            width: 100%; padding: 10px; border: none; border-radius: 5px; background: #fff;
+            color: #000; margin-bottom: 10px; font-weight: bold; outline: none; box-sizing: border-box;
+        }
+        #entity-list { flex-grow: 1; overflow-y: auto; list-style: none; padding: 0; margin: 0; }
+        #entity-list li {
+            padding: 8px 10px; border-bottom: 1px solid rgba(255,255,255,0.1); cursor: pointer;
+            transition: background 0.2s; display: flex; justify-content: space-between; font-size: 13px;
+        }
+        #entity-list li:hover { background: rgba(68, 136, 255, 0.2); }
+        .selected-item { color: #fff; font-weight: bold; background: rgba(68, 136, 255, 0.35); border-left: 4px solid #4488ff; }
+        .badge { font-size: 11px; background: #333; padding: 2px 6px; border-radius: 10px; white-space: nowrap; margin-left: 5px;}
+        
+        .btn-group { display: flex; gap: 10px; margin-top: 10px; }
+        .btn-panel { flex: 1; padding: 10px; border: none; border-radius: 5px; cursor: pointer; font-weight: bold; color: white; }
+        #btn-clear { background: #555; }
+        #btn-record { background: #ff4444; }
+        .recording-active { background: #4488ff !important; box-shadow: 0 0 15px #4488ff; }
+    </style>
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+                "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+            }
+        }
+    </script>
+</head>
+<body>
+    <div id="ui">
+        <h1>Organic VR: Mobius Flow</h1>
+        <div class="upload-btn">
+            <span>MP3 오디오 선택하여 시작</span>
+            <input type="file" id="audioInput" accept="audio/*">
+        </div>
+        <div id="loading">유체 데이터 연산 중...</div>
+        <div id="instructions">
+            <strong>[PC 조작]</strong><br>
+            우클릭: 확산/응집 | ESC: UI 숨김 | R: 녹화 | <strong>D: 다이코틱 효과 토글</strong><br><br>
+            <strong>[VR 조작]</strong><br>
+            <strong>왼쪽 트리거: 다이코틱 효과 (좌안 블러/명도↓채도↑) 토글</strong><br>
+            <strong>왼쪽 썸스틱 (상/하): 우주 스케일(크기) 확대/축소</strong><br>
+            <strong>오른쪽 썸스틱 (상/하): 입자 거리 밀기/당기기</strong><br>
+            오른쪽 트리거: 입자 확산/응집<br>
+            왼쪽 X/Y 버튼: UI 토글 | 오른쪽 A/B 버튼: PC 녹화
+        </div>
+    </div>
+
+    <div id="control-panel">
+        <h2>차원 추적기 (다중 선택)</h2>
+        <input type="text" id="search-input" placeholder="이름 검색 (예: 서울, 호랑이)">
+        <ul id="entity-list"></ul>
+        <div class="btn-group">
+            <button id="btn-clear" class="btn-panel">선택 초기화</button>
+            <button id="btn-record" class="btn-panel">⏺ 녹화 (R)</button>
+        </div>
+    </div>
+
+    <div id="hud">PC: D(다이코틱), R(녹화) | VR: L트리거(다이코틱), 양쪽 썸스틱(스케일/거리)</div>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { VRButton } from 'three/addons/webxr/VRButton.js';
+        import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+        let scene, camera, renderer, controls;
+        let audioCtx, analyser, dataArray;
+        let currentState = 'ORGANIC_FLOW'; 
+        let mainGroup; 
+
+        let particleSystem;
+        let pPositions, pVelocities, originalParticleParams, pColors;
+        let entitiesData = [], entityMappings = [];
+        let TOTAL_PARTICLE_COUNT = 0;
+
+        let selectedEntities = new Set();
+        let uiVisible = true;
+        
+        let vrToggleBtnPressed = false;
+        let vrRecordBtnPressed = false;
+        let vrTriggerRightPressed = false;
+        let vrTriggerLeftPressed = false; 
+
+        let scaleTarget = 1.0;
+        let zTarget = -3.0; // VR에서 시야 앞쪽으로 밀어넣기 위해 기본값을 -3.0으로 설정
+
+        let isDichoptic = true; 
+        let dichopticFilter;
+
+        let mediaRecorder;
+        let recordedChunks = [];
+        let isRecording = false;
+        const clock = new THREE.Clock();
+        const colorObj = new THREE.Color(); 
+
+        async function loadEntitiesData() {
+            try {
+                const response = await fetch('./entities.json');
+                if(!response.ok) throw new Error("JSON Not Found");
+                entitiesData = await response.json();
+            } catch (error) {
+                entitiesData = [];
+                for(let i=0; i<3072; i++) {
+                    entitiesData.push({ name: `Node_${i+1}`, category: i % 2 === 0 ? "TypeA" : "TypeB" });
+                }
+            }
+
+            entitiesData.sort(() => Math.random() - 0.5);
+            let currentIndex = 0;
+            entitiesData.forEach((entity, index) => {
+                const weightOptions = [50, 60, 70, 80, 90, 100];
+                const count = weightOptions[Math.floor(Math.random() * weightOptions.length)];
+                const startIndex = currentIndex;
+                const endIndex = currentIndex + count - 1;
+                
+                const fixedHue = Math.random(); 
+                
+                entityMappings.push({
+                    id: index, name: entity.name, startIndex, endIndex, count, 
+                    fixedHue: fixedHue, category: entity.category
+                });
+                currentIndex += count;
+            });
+            TOTAL_PARTICLE_COUNT = currentIndex;
+        }
+
+        document.getElementById('audioInput').addEventListener('change', async function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            document.getElementById('loading').style.display = 'block';
+            await loadEntitiesData(); 
+            const reader = new FileReader();
+            reader.onload = function(e) { initAudio(e.target.result); };
+            reader.readAsArrayBuffer(file);
+        });
+
+        function initAudio(arrayBuffer) {
+            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            audioCtx.decodeAudioData(arrayBuffer, function(buffer) {
+                const source = audioCtx.createBufferSource();
+                source.buffer = buffer;
+                analyser = audioCtx.createAnalyser();
+                analyser.fftSize = 256;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
+                source.connect(analyser);
+                analyser.connect(audioCtx.destination);
+                source.loop = true;
+                source.start(0);
+                
+                document.getElementById('ui').style.display = 'none';
+                document.getElementById('hud').style.display = 'block';
+                document.getElementById('control-panel').style.display = 'flex'; 
+                document.body.appendChild(VRButton.createButton(renderer));
+                
+                initUI(); 
+                initThreeJS();
+                animate();
+            });
+        }
+
+        function initUI() {
+            const searchInput = document.getElementById('search-input');
+            const clearBtn = document.getElementById('btn-clear');
+            const recordBtn = document.getElementById('btn-record');
+            
+            searchInput.addEventListener('input', (e) => renderList(e.target.value));
+            clearBtn.addEventListener('click', () => { selectedEntities.clear(); renderList(searchInput.value); });
+            recordBtn.addEventListener('click', toggleRecording);
+            renderList();
+        }
+
+        function renderList(filter = '') {
+            const list = document.getElementById('entity-list');
+            list.innerHTML = '';
+            const lowerFilter = filter.toLowerCase();
+            const filtered = entityMappings.filter(e => e.name.toLowerCase().includes(lowerFilter)).slice(0, 100);
+            
+            filtered.forEach(entity => {
+                const li = document.createElement('li');
+                li.innerHTML = `<span style="color:#ddd">${entity.name}</span> <span class="badge">${entity.count} 입자</span>`;
+                if (selectedEntities.has(entity.id)) li.classList.add('selected-item');
+                li.addEventListener('click', () => {
+                    selectedEntities.has(entity.id) ? selectedEntities.delete(entity.id) : selectedEntities.add(entity.id);
+                    renderList(filter); 
+                });
+                list.appendChild(li);
+            });
+        }
+
+        function toggleRecording() {
+            const recordBtn = document.getElementById('btn-record');
+            if (isRecording) {
+                if(mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+                isRecording = false;
+                recordBtn.innerText = '⏺ 녹화 (R)';
+                recordBtn.classList.remove('recording-active');
+            } else {
+                try {
+                    recordedChunks = [];
+                    const stream = renderer.domElement.captureStream(30);
+                    let mimeType = 'video/webm;codecs=vp9';
+                    if (MediaRecorder.isTypeSupported('video/mp4')) mimeType = 'video/mp4';
+
+                    mediaRecorder = new MediaRecorder(stream, { mimeType: mimeType });
+                    mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) recordedChunks.push(e.data); };
+                    mediaRecorder.onstop = () => {
+                        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+                        const blob = new Blob(recordedChunks, { type: mimeType });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.style.display = 'none';
+                        a.href = url;
+                        a.download = `Organic_Fluid_Record.${ext}`;
+                        document.body.appendChild(a);
+                        a.click();
+                        setTimeout(() => { document.body.removeChild(a); URL.revokeObjectURL(url); }, 100);
+                    };
+                    mediaRecorder.start();
+                    isRecording = true;
+                    recordBtn.innerText = '⏹ 저장 중지';
+                    recordBtn.classList.add('recording-active');
+                } catch (e) { console.warn("녹화 미지원 브라우저입니다."); }
+            }
+        }
+
+        function initThreeJS() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x010102); 
+            scene.fog = new THREE.FogExp2(0x010102, 0.015);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            camera.position.set(0, 1.6, 3); 
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true; 
+            
+            // VR 기준 좌표계를 카메라 위치 기준(local)으로 명확히 설정하여 검은 화면 방지
+            renderer.xr.setReferenceSpaceType('local');
+
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.5;
+            document.body.appendChild(renderer.domElement);
+
+            const filterGeo = new THREE.PlaneGeometry(3, 3);
+            const filterMat = new THREE.MeshPhysicalMaterial({
+                color: 0xaa55ff, transmission: 0.9, roughness: 0.7, transparent: true, opacity: 0.85 
+            });
+            dichopticFilter = new THREE.Mesh(filterGeo, filterMat);
+            dichopticFilter.layers.set(1); 
+            scene.add(dichopticFilter);
+
+            renderer.xr.addEventListener('sessionstart', () => {
+                document.getElementById('control-panel').style.display = 'none';
+                document.getElementById('hud').style.display = 'none';
+                controls.enabled = false; 
+            });
+            renderer.xr.addEventListener('sessionend', () => {
+                document.getElementById('control-panel').style.display = uiVisible ? 'flex' : 'none';
+                document.getElementById('hud').style.display = 'block';
+                controls.enabled = true; 
+            });
+
+            controls = new OrbitControls(camera, renderer.domElement);
+            controls.target.set(0, 1.5, -3);
+            controls.enableDamping = true;
+
+            mainGroup = new THREE.Group();
+            
+            // VR 기기 착용 시 바로 눈 앞에 오도록 명확히 위치 설정
+            mainGroup.position.set(0, 1.5, -3.0); 
+            scene.add(mainGroup);
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0));
+
+            createParticles(); 
+
+            window.addEventListener('contextmenu', (e) => { e.preventDefault(); currentState = (currentState === 'ORGANIC_FLOW') ? 'SCATTER' : 'ORGANIC_FLOW'; });
+            window.addEventListener('resize', onWindowResize);
+            window.addEventListener('keydown', (e) => {
+                if (document.activeElement.id === 'search-input' && e.key !== 'Escape') return;
+                const panel = document.getElementById('control-panel');
+                if (e.key === 'Escape') { uiVisible = false; document.activeElement.blur(); } 
+                else if (e.key === 'r' || e.key === 'R') { toggleRecording(); } 
+                else if (e.key === 'd' || e.key === 'D') { isDichoptic = !isDichoptic; } 
+                else { uiVisible = true; }
+                if (!renderer.xr.isPresenting) panel.style.display = uiVisible ? 'flex' : 'none';
+            });
+        }
+
+        function createParticles() {
+            const geo = new THREE.BufferGeometry();
+            pPositions = new Float32Array(TOTAL_PARTICLE_COUNT * 3);
+            pVelocities = new Float32Array(TOTAL_PARTICLE_COUNT * 3);
+            
+            // X,Y,Z 좌표 대신 파라메트릭 기하학을 위한 U, V 변수 저장
+            originalParticleParams = new Float32Array(TOTAL_PARTICLE_COUNT * 3);
+            pColors = new Float32Array(TOTAL_PARTICLE_COUNT * 3); 
+            
+            for (let i = 0; i < entityMappings.length; i++) {
+                const entity = entityMappings[i];
+                for (let p = entity.startIndex; p <= entity.endIndex; p++) {
+                    const idx = p * 3;
+                    
+                    // u: 0 ~ 2PI (원형 둘레), v: 두께/폭, w: 노이즈
+                    originalParticleParams[idx] = Math.random() * Math.PI * 2; 
+                    originalParticleParams[idx+1] = (Math.random() - 0.5) * 1.5; 
+                    originalParticleParams[idx+2] = (Math.random() - 0.5) * 0.5; 
+                    
+                    // 초기 위치는 모두 중앙 0,0,0으로. render 루프에서 뫼비우스 공식으로 펴짐.
+                    pPositions[idx] = 0;
+                    pPositions[idx+1] = 0;
+                    pPositions[idx+2] = 0;
+                }
+            }
+
+            geo.setAttribute('position', new THREE.BufferAttribute(pPositions, 3));
+            geo.setAttribute('color', new THREE.BufferAttribute(pColors, 3)); 
+
+            const canvas = document.createElement('canvas');
+            canvas.width = 32; canvas.height = 32;
+            const ctx = canvas.getContext('2d');
+            ctx.beginPath(); ctx.arc(16, 16, 16, 0, Math.PI * 2);
+            ctx.fillStyle = '#ffffff'; ctx.fill();
+            
+            const mat = new THREE.PointsMaterial({
+                size: 0.04, map: new THREE.CanvasTexture(canvas), transparent: true, opacity: 0.8,
+                blending: THREE.AdditiveBlending, depthWrite: false, vertexColors: true 
+            });
+
+            particleSystem = new THREE.Points(geo, mat);
+            particleSystem.frustumCulled = false; 
+            mainGroup.add(particleSystem); 
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() { renderer.setAnimationLoop(render); }
+
+        function render() {
+            let delta = clock.getDelta();
+            if (delta > 0.05) delta = 0.016; 
+            const time = clock.getElapsedTime();
+
+            if (!renderer.xr.isPresenting && controls.enabled) controls.update();
+
+            try {
+                const session = renderer.xr.getSession();
+                if (session) {
+                    let leftXBPressed = false, rightABPressed = false, rightTrigger = false, leftTrigger = false;
+                    for (const source of session.inputSources) {
+                        if (!source.gamepad) continue;
+                        const btns = source.gamepad.buttons;
+                        const axes = source.gamepad.axes;
+                        
+                        const btn4Pressed = (btns.length > 4 && btns[4].pressed);
+                        const btn5Pressed = (btns.length > 5 && btns[5].pressed);
+                        const triggerPressed = (btns.length > 0 && btns[0].value > 0.5);
+                        const thumbstickY = axes.length > 3 ? axes[3] : (axes.length > 1 ? axes[1] : 0);
+
+                        if (source.handedness === 'left') {
+                            if (btn4Pressed || btn5Pressed) leftXBPressed = true;
+                            if (triggerPressed) leftTrigger = true;
+                            if (Math.abs(thumbstickY) > 0.1) scaleTarget -= thumbstickY * 0.03; 
+                        }
+                        if (source.handedness === 'right') {
+                            if (btn4Pressed || btn5Pressed) rightABPressed = true;
+                            if (triggerPressed) rightTrigger = true;
+                            if (Math.abs(thumbstickY) > 0.1) zTarget += thumbstickY * 0.1; 
+                        }
+                    }
+
+                    if (leftTrigger && !vrTriggerLeftPressed) { isDichoptic = !isDichoptic; vrTriggerLeftPressed = true; }
+                    else if (!leftTrigger) { vrTriggerLeftPressed = false; }
+
+                    if (leftXBPressed && !vrToggleBtnPressed) { uiVisible = !uiVisible; vrToggleBtnPressed = true; } 
+                    else if (!leftXBPressed) { vrToggleBtnPressed = false; }
+
+                    if (rightABPressed && !vrRecordBtnPressed) { toggleRecording(); vrRecordBtnPressed = true; } 
+                    else if (!rightABPressed) { vrRecordBtnPressed = false; }
+
+                    if (rightTrigger && !vrTriggerRightPressed) { currentState = (currentState === 'ORGANIC_FLOW') ? 'SCATTER' : 'ORGANIC_FLOW'; vrTriggerRightPressed = true; } 
+                    else if (!rightTrigger) { vrTriggerRightPressed = false; }
+                }
+            } catch (err) { console.warn("VR Input Warning", err); }
+
+            scaleTarget = Math.max(0.2, Math.min(scaleTarget, 10.0)); 
+            zTarget = Math.max(-15.0, Math.min(zTarget, 5.0)); 
+            
+            mainGroup.scale.lerp(new THREE.Vector3(scaleTarget, scaleTarget, scaleTarget), 0.05);
+            mainGroup.position.z += (zTarget - mainGroup.position.z) * 0.05;
+
+            if (isDichoptic && renderer.xr.isPresenting) {
+                const xrCamera = renderer.xr.getCamera(camera);
+                if (xrCamera.cameras.length > 0) {
+                    xrCamera.cameras[0].layers.enable(1);
+                    if(xrCamera.cameras.length > 1) xrCamera.cameras[1].layers.disable(1);
+                    dichopticFilter.position.copy(xrCamera.cameras[0].position);
+                    dichopticFilter.quaternion.copy(xrCamera.cameras[0].quaternion);
+                    dichopticFilter.translateZ(-0.05); 
+                    dichopticFilter.visible = true;
+                }
+            } else { dichopticFilter.visible = false; }
+
+            let audioIntensity = 0;
+            if (analyser) {
+                analyser.getByteFrequencyData(dataArray);
+                let sum = 0; for(let i=0; i<30; i++) sum += dataArray[i]; 
+                audioIntensity = sum / (30 * 255);
+            }
+
+            const isFlowing = (currentState === 'ORGANIC_FLOW');
+            
+            // 전체 형태의 스케일 팽창/수축 효과 (음악과 시간에 반응)
+            const expansion = isFlowing ? (1.0 + audioIntensity * 1.5 + Math.sin(time)*0.2) : (5.0 + Math.random()*2.0);
+
+            // 2.5초 주기 전체 색상 변화 
+            const colorCycle = (time / 2.5) % 1.0;
+
+            for (let i = 0; i < entityMappings.length; i++) {
+                const entity = entityMappings[i];
+                const isSelected = selectedEntities.has(entity.id);
+                
+                for (let p = entity.startIndex; p <= entity.endIndex; p++) {
+                    const idx = p * 3;
+
+                    // 파티클 별 파라미터 불러오기
+                    const u0 = originalParticleParams[idx];
+                    const v0 = originalParticleParams[idx+1];
+                    const w0 = originalParticleParams[idx+2];
+
+                    // 뫼비우스의 띠를 따라 흐르는 U 값 (시간에 따라 전진)
+                    const u = u0 + time * 0.5;
+                    const v = v0;
+
+                    // [수학] 뫼비우스의 띠 3D 파라메트릭 방정식 적용
+                    const R = 1.5; 
+                    const R_mod = R + v * Math.cos(u / 2.0);
+
+                    let mx = R_mod * Math.cos(u);
+                    let my = v * Math.sin(u / 2.0) + w0; // w0로 노이즈 두께 추가
+                    let mz = R_mod * Math.sin(u);
+
+                    // 전체 형태를 은하수처럼 천천히 회전 (Pitch, Yaw 회전)
+                    const rotX = time * 0.4;
+                    const rotY = time * 0.6;
+
+                    // X축 회전
+                    let rx = mx;
+                    let ry = my * Math.cos(rotX) - mz * Math.sin(rotX);
+                    let rz = my * Math.sin(rotX) + mz * Math.cos(rotX);
+
+                    // Y축 회전 (최종 목표 위치)
+                    let tx = rx * Math.cos(rotY) - rz * Math.sin(rotY);
+                    let ty = ry;
+                    let tz = rx * Math.sin(rotY) + rz * Math.cos(rotY);
+
+                    // 스케일 적용
+                    tx *= expansion; ty *= expansion; tz *= expansion;
+
+                    // 흩어질 때(SCATTER)는 노이즈 폭발 위치로
+                    if (!isFlowing) {
+                        tx = (originalParticleParams[idx] - Math.PI) * expansion;
+                        ty = v0 * expansion * 2.0;
+                        tz = w0 * expansion * 5.0;
+                    }
+
+                    // 현재 파티클 위치
+                    let px = pPositions[idx];
+                    let py = pPositions[idx+1];
+                    let pz = pPositions[idx+2];
+
+                    // 부드러운 타겟 추적 (목표 위치를 향한 벡터)
+                    const clusterWeight = isSelected ? 8.0 : 3.5;
+                    pVelocities[idx] += (tx - px) * delta * clusterWeight;
+                    pVelocities[idx+1] += (ty - py) * delta * clusterWeight;
+                    pVelocities[idx+2] += (tz - pz) * delta * clusterWeight;
+
+                    // 오디오에 반응하는 떨림
+                    if (audioIntensity > 0.3) {
+                        pVelocities[idx] += (Math.random() - 0.5) * audioIntensity;
+                        pVelocities[idx+1] += (Math.random() - 0.5) * audioIntensity;
+                        pVelocities[idx+2] += (Math.random() - 0.5) * audioIntensity;
+                    }
+
+                    pPositions[idx] += pVelocities[idx] * delta;
+                    pPositions[idx+1] += pVelocities[idx+1] * delta;
+                    pPositions[idx+2] += pVelocities[idx+2] * delta;
+                    
+                    // 감속 (마찰)
+                    pVelocities[idx] *= 0.85;
+                    pVelocities[idx+1] *= 0.85;
+                    pVelocities[idx+2] *= 0.85;
+
+                    // --- 색상 적용 파트 ---
+                    // 유기적으로 명멸하는 밝기 계산
+                    const lightness = 0.3 + Math.sin(u * 2.0 - time * 3.0) * 0.3;
+
+                    if (isSelected) {
+                        colorObj.setHSL(entity.fixedHue, 0.4, 0.85); 
+                    } else {
+                        colorObj.setHSL(colorCycle, 0.85, lightness); 
+                    }
+                    
+                    pColors[idx] = colorObj.r;
+                    pColors[idx+1] = colorObj.g;
+                    pColors[idx+2] = colorObj.b;
+                }
+            }
+
+            particleSystem.geometry.attributes.color.needsUpdate = true;
+            particleSystem.geometry.attributes.position.needsUpdate = true;
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
